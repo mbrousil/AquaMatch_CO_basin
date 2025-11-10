@@ -427,7 +427,7 @@ Now we'll join the Roy handoffs with the matchup dataset:
 ```{r apply-roy}
 # Based on https://github.com/steeleb/regional-clarity-RS-model/ and
 # https://github.com/rossyndicate/NW-CLP-RS/blob/main/f_apply_handoff_coefficients/src/apply_handoffs_to7.R
-roy_corrected_temporary <- siteSR_matchups %>%
+roy_corrected_temporary <- trim_matchups %>%
   # Standardize sat naming and coordinate with missions that are similar enough
   # to one another
   mutate(sat_harmonize = case_when(
@@ -570,7 +570,7 @@ And then Gardner:
 ```{r apply-gardner}
 # Based on https://github.com/steeleb/regional-clarity-RS-model/ and
 # https://github.com/rossyndicate/NW-CLP-RS/blob/main/f_apply_handoff_coefficients/src/apply_handoffs_to7.R
-gardner_corrected_temporary <- siteSR_matchups %>%
+gardner_corrected_temporary <- trim_matchups %>%
   # Coordinate sat naming with missions that are similar enough to one another
   mutate(sat_harmonize = case_when(
     mission == "LT04" ~ "LS5",
@@ -724,10 +724,10 @@ if (!dir.exists(output_path)) {
 # Export matchups
 write_feather(x = roy_corrected,
               sink = file.path(output_path,
-                               "siteSR_matchups_roy_correction.feather"))
+                               "co_basin_matchups_roy_correction.feather"))
 
 write_feather(x = gardner_corrected,
               sink = file.path(output_path,
-                               "siteSR_matchups_gardner_correction.feather"))
+                               "co_basin_matchups_gardner_correction.feather"))
 
 ```
