@@ -1,0 +1,34 @@
+---
+title: "Colorado Basin Modeling"
+author: "Matthew Brousil"
+date: "2025-11-13"
+output: html_document
+---
+
+# Modeling chlorophyll *a* in the Colorado River Basin
+
+```{r load-packages, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(arrow)
+library(tidymodels)
+library(sf)
+library(nhdplusTools)
+
+tidymodels_prefer()
+```
+
+Read in the Colorado Basin matchups
+```{r load-data}
+# Gardner corrections
+co_matchups_gardner <- arrow::read_feather(
+  file = "out/co_basin_matchups_gardner_correction.feather"
+)
+```
+
+Get HUC 8s
+```{r get-hucs}
+co_basin <- st_read('in/hydrobasins/hybas_na_lev01-12_v1c/hybas_na_lev03_v1c.shp') %>%
+  filter(MAIN_BAS == 7030008710)
+
+huc08s <- get_huc(AOI = co_basin, type = "huc08")
+```

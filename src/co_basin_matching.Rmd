@@ -1,11 +1,11 @@
 ---
-title: "Colorado Basin"
+title: "Colorado Basin Matchups"
 author: "Matthew Brousil"
 date: "2025-11-05"
 output: html_document
 ---
 
-```{r file-setup}
+```{r file-setup, message = FALSE, warning = FALSE}
 library(tidyverse) 
 library(data.table)
 # FYI some conflicts with data.table, mostly {dplyr} and {lubridate} 
@@ -21,6 +21,7 @@ library(scales)
 library(tigris)
 library(rnaturalearth)
 library(EDIutils)
+library(nhdplusTools)
 
 # Files sourced from Drive are available to any Google User, the console will walk through authentication steps.
 drive_auth("therossyndicate@gmail.com")
@@ -214,8 +215,18 @@ focal_states <- conterminous_us %>%
 countries <- ne_countries(continent = "North America", scale = "large") %>%
   st_transform(crs = 9311)
 
-# Focal records
-trim_matchups_sf <- matchups_sf[co_basin, ]
+# Focal records & add HUC08s
+huc08s <- get_huc(AOI = co_basin, type = "huc08") %>%
+    st_transform(crs = 9311)
+
+trim_matchups_sf <- matchups_sf[co_basin, ] %>%
+  st_join(
+    x = .,
+    y = huc08s %>%
+      select(huc8, name),
+  )
+
+# Tack on HUC info
 trim_matchups <- trim_matchups_sf %>%
   sf_to_df(fill = TRUE) 
 
