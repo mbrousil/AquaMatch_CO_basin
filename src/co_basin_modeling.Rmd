@@ -233,7 +233,8 @@ full_with_pred %>%
   scale_linetype_discrete("") +
   scale_x_date(date_breaks = "year", date_labels = "%Y") +
   ggtitle("siteSR_id WQP_845852 timeseries") +
-  theme_bw()
+  theme_bw() +
+  theme(legend.position = "bottom")
 ```
 
 
