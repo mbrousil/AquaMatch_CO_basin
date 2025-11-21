@@ -203,6 +203,8 @@ full_with_pred <- full_data %>%
 test_with_preds %>%
   ggplot() +
   geom_point(aes(x = harmonized_value, y = .pred)) +
+  xlim(c(0, 200)) +
+  ylim(c(0, 200)) +
   ggtitle("Test set overall observed vs. predicted") +
   theme_bw()
 
@@ -217,6 +219,8 @@ test_with_preds %>%
   filter(siteSR_id == "WQP_845852") %>%
   ggplot() +
   geom_point(aes(x = harmonized_value, y = .pred)) +
+    xlim(c(0, 100)) +
+  ylim(c(0, 100)) +
   ggtitle("Test set observed vs. predicted for siteSR_id WQP_845852") +
   theme_bw()
 
