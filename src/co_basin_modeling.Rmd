@@ -180,61 +180,60 @@ final_workflow
 final_fit <- final_workflow %>%
   fit(data = model_prep_train_set)
 
+# Test set predictions
 workflow_predictions <- predict(final_fit, new_data = model_prep_test_set)
 
 test_with_preds <- model_prep_test_set %>%
   cbind(workflow_predictions)
 
-test_with_preds %>%
-  ggplot() +
-  geom_point(aes(x = harmonized_value, y = .pred))
+# Full set predictions to show train vs test
+full_data <- rbind(
+  model_prep_train_set %>%
+    mutate(data_type = "train"),
+  model_prep_test_set %>%
+    mutate(data_type = "test")
+) 
 
-# Site with the most test holdout observations
+full_predict <- predict(final_fit, new_data = full_data)
+
+full_with_pred <- full_data %>%
+  cbind(full_predict)
+
+# Overall test set obs vs pred
 test_with_preds %>%
-  filter(siteSR_id == "WQP_162069") %>%
   ggplot() +
   geom_point(aes(x = harmonized_value, y = .pred)) +
-  ggtitle("Observed vs. predicted for siteSR_id WQP_162069")
+  ggtitle("Overall observed vs. predicted") +
+  theme_bw()
 
-test_with_preds %>%
-  filter(siteSR_id == "WQP_162069") %>%
-  arrange(date) %>%
-  mutate(year = year(date)) %>%
-  pivot_longer(names_to = "val_type", values_to = "value",
-               cols = c("harmonized_value", ".pred")) %>%
-  ggplot() +
-  geom_line(aes(x = date, y = value, color = val_type)) +
-  geom_point(aes(x = date, y = value, fill = val_type),
-             color = "black", pch = 21) +
-  facet_wrap(vars(year), scales = "free_x") +
-  ggtitle("Time series for siteSR_id WQP_162069") +
-  theme_bw() +
-  theme(legend.position = "bottom")
+# Overall VIP
+vip::vip(final_fit) +
+    ggtitle("Variable importance") +
+    theme_bw()
 
-# Site with the SECOND most test holdout observations
+# Site with the most observations
+# Test set only
 test_with_preds %>%
-  filter(siteSR_id == "WQP_167612") %>%
+  filter(siteSR_id == "WQP_845852") %>%
   ggplot() +
   geom_point(aes(x = harmonized_value, y = .pred)) +
-  ggtitle("Observed vs. predicted for siteSR_id WQP_167612")
+  ggtitle("Test set observed vs. predicted for siteSR_id WQP_845852") +
+  theme_bw()
 
-test_with_preds %>%
-  filter(siteSR_id == "WQP_167612") %>%
+# Plot full timeseries
+full_with_pred %>%
+  filter(siteSR_id == "WQP_845852") %>%
   arrange(date) %>%
-  mutate(year = year(date)) %>%
-  pivot_longer(names_to = "val_type", values_to = "value",
-               cols = c("harmonized_value", ".pred")) %>%
   ggplot() +
-  geom_line(aes(x = date, y = value, color = val_type)) +
-  geom_point(aes(x = date, y = value, fill = val_type),
+  geom_line(aes(x = date, y = harmonized_value, linetype = "observed"),
+            color = "orange", pch = 21) +
+  geom_point(aes(x = date, y = .pred, fill = data_type),
              color = "black", pch = 21) +
-  facet_wrap(vars(year), scales = "free_x") +
-  ggtitle("Time series for siteSR_id WQP_167612") +
-  theme_bw() +
-  theme(legend.position = "bottom")
-
-
-vip::vip(final_fit)
+  ylab("") +
+  scale_linetype_discrete("") +
+  scale_x_date(date_breaks = "year", date_labels = "%Y") +
+  ggtitle("siteSR_id WQP_845852") +
+  theme_bw()
 ```
 
 
