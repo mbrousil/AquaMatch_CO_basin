@@ -203,7 +203,7 @@ full_with_pred <- full_data %>%
 test_with_preds %>%
   ggplot() +
   geom_point(aes(x = harmonized_value, y = .pred)) +
-  ggtitle("Overall observed vs. predicted") +
+  ggtitle("Test set overall observed vs. predicted") +
   theme_bw()
 
 # Overall VIP
