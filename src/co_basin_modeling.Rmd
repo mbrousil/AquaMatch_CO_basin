@@ -1,0 +1,244 @@
+---
+title: "Colorado Basin Modeling"
+author: "Matthew Brousil"
+date: "2025-11-13"
+output: html_document
+---
+
+# Modeling chlorophyll *a* in the Colorado River Basin
+```{r load-packages, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(arrow)
+library(tidymodels)
+library(sf)
+library(nhdplusTools)
+library(spatialsample)
+library(lightgbm)
+library(bonsai)
+
+tidymodels_prefer()
+```
+
+Read in the Colorado Basin matchups
+```{r load-data}
+# Gardner corrections
+co_matchups_gardner <- arrow::read_feather(
+  file = "out/co_basin_matchups_gardner_correction.feather"
+)
+```
+
+How are matchups spatially distributed within the basin?
+```{r get-hucs}
+huc_counts <- co_matchups_gardner %>%
+  count(huc8)
+
+co_basin <- st_read('in/hydrobasins/hybas_na_lev01-12_v1c/hybas_na_lev03_v1c.shp') %>%
+  filter(MAIN_BAS == 7030008710)
+
+huc08s <- get_huc(AOI = co_basin, type = "huc08") %>%
+  left_join(x = ., y = huc_counts, by = c("huc8")) %>%
+  st_transform(crs = 9311)
+
+ggplot() +
+  geom_sf(data = huc08s, aes(fill = n)) +
+  scale_fill_viridis_c(trans = "log10") +
+  theme_bw()
+```
+
+How are matchups temporally distributed?
+```{r temporal-vis}
+co_matchups_gardner %>%
+  mutate(year = year(date)) %>%
+  ggplot() +
+  geom_histogram(aes(year), color = "black", fill = "white") +
+  theme_bw()
+```
+
+Data prep
+```{r filter-data}
+# Partially following https://github.com/GardnerLab-Pitt/OhioRiver_SR/blob/main/04_LC02_model_train_eval.Rmd
+model_prep_data <- co_matchups_gardner %>%
+  # filter(algal_mask == 1) %>% 
+  filter(
+    harmonized_value < 200,
+         harmonized_value > 0.01,
+         flag_temp_min == 0,
+         flag_temp_max == 0) %>% 
+  # filter(prop_hillShadow == 1 | is.na(prop_hillShadow)) %>%
+  # filter(Intersect == TRUE) %>% 
+  # filter(pCount_algal_mask > 30) %>% 
+  # filter(characteristicName != 'Chlorophyll a, corrected for pheophytin') %>%
+  # filter(Surface_temp_kelvin > 270) %>%
+  # Using siteSR_id for SiteID
+  select(date:gn.gn, lat, lon, uniqueID, hue, dw, saturation, siteSR_id,
+         harmonized_value) %>%
+  # Arrange by date (within huc8) for temporal splits
+  arrange(desc(date)) %>%
+  group_by(huc8) %>%
+  mutate(order = row_number(),
+         year = year(date)) %>%
+  ungroup()
+```
+
+Holdouts and splits
+```{r holdouts}
+# Hold out a couple specific years that are ~20% of the dataset
+model_prep_test_set <- model_prep_data %>%
+  group_by(huc8) %>%
+  # filter(order <= ceiling(n() * 0.2)) %>%
+  filter(year %in% c(2022, 2023, 2007)) %>%
+  ungroup()
+  
+# Training set: 80% of each huc8
+model_prep_train_set <- model_prep_data %>%
+  anti_join(model_prep_test_set)
+
+spatial_splits <- spatial_leave_location_out_cv(data = model_prep_train_set,
+                                                group = huc8)
+```
+
+LightGBM specification
+```{r lightgbm-setup}
+# lgbm_model <- boost_tree(
+#   mode = "regression",
+#   trees = 500,
+#   learn_rate = 0.1,
+#   tree_depth = 6,
+#   min_n = 10
+# ) %>%
+#   set_engine("lightgbm")
+
+# https://workshops.tidymodels.org/archive/2023-07-nyr/advanced-04-iterative.html
+lgbm_model <- boost_tree(
+  trees = tune(),
+  learn_rate = tune(),
+  min_n = tune()
+) %>%
+  set_mode("regression") %>%
+  set_engine("lightgbm")
+
+# Predictors
+preds <- model_prep_data %>%
+    select(NR:gn.gn, GCI, IRG, SABI, KIVU, GB, GNDVI, EVI, KAB, KRL, 
+           # surfacetemp_corr7,
+           dw, hue, saturation) %>%
+    names()
+
+chla_recipe <- recipe(
+  reformulate(termlabels = preds, response = "harmonized_value"),
+  data = model_prep_data
+)
+
+lgbm_workflow <- workflow(chla_recipe, lgbm_model)
+
+lgbm_param <- lgbm_workflow %>%
+  extract_parameter_set_dials()
+
+reg_metrics <- metric_set(mae, rsq)
+
+# Reproducibility
+set.seed(67)
+initial_grid <- lgbm_workflow %>%
+  tune_grid(
+    resamples = spatial_splits,
+    grid = nrow(lgbm_param) + 2,
+    param_info = lgbm_param,
+    metrics = reg_metrics
+  )
+
+show_best(initial_grid, metric = "mae")
+```
+
+
+Run with Bayesian grid search
+```{r}
+set.seed(76)
+lgbm_bayes <- lgbm_workflow %>%
+  tune_bayes(
+    resamples = spatial_splits,
+    initial = initial_grid,
+    iter = 20,
+    param_info = lgbm_param,
+    metrics = reg_metrics
+  )
+
+show_best(lgbm_bayes, metric = "mae")
+
+autoplot(lgbm_bayes, metric = "mae")
+
+autoplot(lgbm_bayes, metric = "mae", type = "performance")
+```
+
+```{r select-best}
+best_param <- select_best(lgbm_bayes, metric = "mae")
+
+final_workflow <- lgbm_workflow %>%
+  finalize_workflow(best_param)
+
+final_workflow
+
+final_fit <- final_workflow %>%
+  fit(data = model_prep_train_set)
+
+# Test set predictions
+workflow_predictions <- predict(final_fit, new_data = model_prep_test_set)
+
+test_with_preds <- model_prep_test_set %>%
+  cbind(workflow_predictions)
+
+# Full set predictions to show train vs test
+full_data <- rbind(
+  model_prep_train_set %>%
+    mutate(data_type = "train"),
+  model_prep_test_set %>%
+    mutate(data_type = "test")
+) 
+
+full_predict <- predict(final_fit, new_data = full_data)
+
+full_with_pred <- full_data %>%
+  cbind(full_predict)
+
+# Overall test set obs vs pred
+test_with_preds %>%
+  ggplot() +
+  geom_point(aes(x = harmonized_value, y = .pred)) +
+  xlim(c(0, 200)) +
+  ylim(c(0, 200)) +
+  ggtitle("Test set overall observed vs. predicted") +
+  theme_bw()
+
+# Overall VIP
+vip::vip(final_fit) +
+    ggtitle("Variable importance") +
+    theme_bw()
+
+# Site with the most observations
+# Test set only
+test_with_preds %>%
+  filter(siteSR_id == "WQP_845852") %>%
+  ggplot() +
+  geom_point(aes(x = harmonized_value, y = .pred)) +
+    xlim(c(0, 100)) +
+  ylim(c(0, 100)) +
+  ggtitle("Test set observed vs. predicted for siteSR_id WQP_845852") +
+  theme_bw()
+
+# Plot full timeseries
+full_with_pred %>%
+  filter(siteSR_id == "WQP_845852") %>%
+  arrange(date) %>%
+  ggplot() +
+  geom_line(aes(x = date, y = harmonized_value, linetype = "observed"),
+            color = "orange", pch = 21) +
+  geom_point(aes(x = date, y = .pred, fill = data_type),
+             color = "black", pch = 21) +
+  ylab("") +
+  scale_linetype_discrete("") +
+  scale_x_date(date_breaks = "year", date_labels = "%Y") +
+  ggtitle("siteSR_id WQP_845852 timeseries") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+
