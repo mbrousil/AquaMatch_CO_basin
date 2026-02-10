@@ -1,0 +1,373 @@
+---
+title: "LightGBM based on Sillen script"
+author: "Matthew Brousil"
+date: "2025-12-08"
+output: html_document
+---
+
+Code is based on Sillen's code [here](https://github.com/GardnerLab-Pitt/OhioRiver_SR/blob/9f4d8d5d8f82b89b999081d22c944977043dc520/04_LC02_model_train_eval.Rmd) with gpt-4o assistance
+
+```{r load-packages, message = FALSE, warning=FALSE}
+library(lightgbm)
+library(tidyverse)
+library(Metrics)
+library(arrow)
+library(sf)
+library(CAST)
+library(tictoc)
+```
+
+## Preparation
+
+Read in the Colorado Basin matchups
+```{r load-data}
+# Gardner corrections
+co_matchups_gardner <- arrow::read_feather(
+  file = "out/co_basin_matchups_gardner_correction.feather"
+)
+```
+
+Function definition from Sam Sillen's code
+```{r def-funs}
+# https://github.com/GardnerLab-Pitt/OhioRiver_SR/blob/9f4d8d5d8f82b89b999081d22c944977043dc520/04_LC02_model_train_eval.Rmd
+
+# This function randomly samples match-ups across different locations, times, and concentrations for splitting training/validation data
+
+holdout <- function(x) {
+  
+  x <- x %>%
+    # Split up into spatial and temporal groups
+    group_by(long_group, time_group) %>% 
+    dplyr::mutate(mag = cut(harmonized_value, quantile(
+      x = harmonized_value,
+      c(0, 0.2, 0.4, 0.6, 0.8, 0.9, 1),
+      include.lowest = T
+    )),
+    mag = factor(
+      mag,
+      labels = c( 0.2, 0.4, 0.6, 0.8, 0.9, 1)
+    )) %>%
+    ungroup()
+  
+  set.seed(22)
+  
+  train <- x %>%
+    group_by(time_group, long_group, mag) %>%
+    # 80% of data will be used for training
+    sample_frac(.8) %>% 
+    ungroup() %>%
+    dplyr::mutate(.partitions = 1)
+  
+  validate <- x %>%
+    anti_join(train) %>%
+    dplyr::mutate(.partitions = 2)
+  
+  out <- train %>%
+    bind_rows(validate) 
+  
+  return(out)
+}
+```
+
+<br>
+
+#### Data prep
+
+Filters:
+
++ harmonized_value > 0.01
++ harmonized_discrete_depth_value <= 10 | is NA
+
+```{r filter-data}
+model_prep_data <- co_matchups_gardner %>%
+  filter(
+    harmonized_value > 0.01,
+    # depth < 10m, allow NAs because there are a lot
+    harmonized_discrete_depth_value <= 10 |
+      is.na(harmonized_discrete_depth_value)
+  ) %>% 
+  select(siteSR_id, date, lat, lon, huc8, tier, harmonized_value,
+         prop_hillShadow, mean_hillShade, Red, Green, Blue, Nir, Swir1, Swir2,
+         Surface_temp_kelvin, NR:saturation, dw) %>%
+  mutate(
+    year = year(date),
+    log_harmonized_value = log(harmonized_value))
+```
+
+<br>
+
+Temporal distribution
+```{r plot-years}
+model_prep_data %>%
+  ggplot() +
+  geom_histogram(aes(year), color = "black", fill = "white", binwidth = 1) +
+  theme_bw()
+```
+
+## Model building
+
+### Train/test holdout
+```{r create-holdouts}
+# https://github.com/GardnerLab-Pitt/OhioRiver_SR/blob/9f4d8d5d8f82b89b999081d22c944977043dc520/04_LC02_model_train_eval.Rmd
+model_pre_train_prep <- model_prep_data %>%
+  mutate(
+    # Sam Sillen code:
+    lat_group = cut_number(lat, 5, right= F),
+    long_group = cut_number(lon, 5, right=F),
+    # date = lubridate::ymd(date),
+    julian = as.numeric(julian.Date(date)),
+    space_group = paste0(lat_group, long_group),
+    time_group = cut_number(julian, 5, right=F)
+  ) %>%
+  holdout() %>% 
+  ungroup() %>%
+  as.data.frame() %>%
+  filter_all(all_vars(!is.infinite(.))) %>%
+  filter_all(all_vars(!is.nan(.)))
+
+# Training data, 80%
+train <- model_pre_train_prep %>%
+  filter(.partitions == 1)
+
+# Test set
+holdout <- model_pre_train_prep %>%
+  filter(.partitions == 2)
+
+# Vars to use
+# Features that were in top 20 of previous model run var importance
+features <- c("B.GN", "G.BR", "GR2", "IRG", "KRL", "R.BS", "Surface_temp_kelvin",
+              "B.RG", "BG", "SR", "EVI", "GB", "GCI", "GN2", "N_S", "SN", "B.GS",
+              "B.NS", "G.BN", "G.BS")
+
+# Create cross validation folds for spatial-temporal cross validation
+folds <- CreateSpacetimeFolds(train, spacevar = "long_group",
+                              timevar = "time_group", k = 5)
+```
+
+### Training
+```{r train_model}
+# Separate features and target variable
+train_x <- train %>%
+  select(all_of(features)) %>%
+  as.matrix()
+
+train_y <- train$log_harmonized_value
+
+# Create LightGBM datasets
+dtrain <- lgb.Dataset(data = train_x, label = train_y)
+
+# Step 4: Define model parameters
+params <- list(
+  objective = "regression",  # Continuous response variable
+  metric = "rmse",            # Root Mean squared error (RMSE)
+  boosting = "gbdt",        # Gradient Boosting Decision Tree
+  learning_rate = 0.1,      # Learning rate
+  lambda = 0
+)
+
+param_grid <- expand.grid(
+  # eta
+  learning_rate = c(0.05, 0.1, 0.3),
+  num_leaves = c(15, 31),
+  max_depth = c(-1, 5),
+  alpha = c(0.01, 0.1, 0.5, 1),
+  lambda = c(0.01, 0.1, 0.5, 1)
+)
+
+# Loop through each combination of hyperparameters
+cv_results <- list()
+
+
+tic()
+
+set.seed(22)
+
+for (i in 1:nrow(param_grid)) {
+  params_temp <- list(
+    objective = "regression",
+    metric = "rmse", 
+    learning_rate = param_grid$learning_rate[i],
+    num_leaves = param_grid$num_leaves[i],
+    max_depth = param_grid$max_depth[i],
+    alpha = param_grid$alpha[i],
+    lambda = param_grid$lambda[i],
+    seed = 122
+  )
+  
+  # Perform cross-validation
+  cv_model <- lgb.cv(
+    params = params_temp,
+    data = dtrain,
+    folds = folds$indexOut,
+    nrounds = 500,                  # Number of boosting iterations
+    early_stopping_rounds = 10,     # Stop early if no improvement
+    verbose = -1                   # Print training progress
+  )
+  # Store results
+  cv_results[[i]] <- list(
+    params = params_temp,
+    best_iter = cv_model$best_iter,
+    best_rmse = min(unlist(cv_model$record_evals$valid$rmse$eval))
+  )
+}
+
+toc()
+
+# Find the best combination of hyperparameters
+best_result <- cv_results[[which.min(sapply(cv_results, function(x) x$best_rmse))]]
+print(best_result)
+
+# Train the final model using the best hyperparameters and number of iterations
+final_model <- lgb.train(
+  params = best_result$params,
+  data = dtrain,
+  nrounds = best_result$best_iter,
+  verbose = 1
+)
+
+lgb.plot.importance(lgb.importance(final_model))
+```
+
+### Testing
+```{r predict-holdout-set}
+holdout_x <- holdout %>%
+  select(all_of(features)) %>%
+  as.matrix()
+
+holdout_y <- holdout$log_harmonized_value
+
+# Predict from candidate models:
+predictions <- predict(final_model, holdout_x)
+
+# Combine the held out data and the predictions
+evaluation_data <- data.frame(
+  actual = holdout_y,
+  predicted = predictions,
+  date = holdout$date,
+  siteSR_id = holdout$siteSR_id
+)
+```
+
+### Holdout prediction
+```{r plot-holdout-performance}
+evaluation_data %>%
+  ggplot(aes(x = actual, y = predicted)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Holdout: Predicted vs Actual Values",
+       x = "Actual Values", y = "Predicted Values") +
+  xlim(c(0, max(c(evaluation_data$actual, evaluation_data$predicted)))) +
+  ylim(c(0, max(c(evaluation_data$actual, evaluation_data$predicted)))) +
+  theme_bw()
+```
+
+
+### Full predicted vs. actual 1:1
+```{r predicted-vs-actual}
+training_predictions <- predict(final_model, train_x)
+
+train_predicted <- data.frame(
+  actual = train_y,
+  predicted = training_predictions,
+  date = train$date,
+  siteSR_id = train$siteSR_id
+)
+
+# Tag predictions with whether they were used to train or not
+full_predicted <- bind_rows(
+  train_predicted %>%
+    mutate(origin = "Training set"),
+  evaluation_data %>%
+    mutate(origin = "Holdout set")
+)
+
+full_predicted %>%
+  ggplot() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_point(aes(x = actual, y = predicted, fill = origin),
+             pch = 21, color = "black") +
+  labs(title = "Full dataset: Predicted vs. Actual values",
+       x = "Actual Values", y = "Predicted Values") +
+  xlim(c(0, max(c(full_predicted$actual, full_predicted$predicted)))) +
+  ylim(c(0, max(c(full_predicted$actual, full_predicted$predicted)))) +
+  theme_bw()
+```
+
+<br>
+
+### Timeseries plotting
+
+#### Training timeseries
+```{r training-time-series-plot, fig.height = 9, fig.width=7}
+# Plot of a subset of the biggest sites
+biggest_sites <- full_predicted %>%
+  count(siteSR_id) %>%
+  arrange(desc(n)) %>%
+  head(n = 10) %>%
+  pull(siteSR_id)
+
+full_predicted %>%
+  filter(
+    siteSR_id %in% biggest_sites,
+    origin == "Training set"
+  ) %>%
+  ggplot(aes(x = date)) +
+  # Observed
+  geom_line(aes(y = actual, linetype = "Observed"), color = "orange") +
+  # Predicted
+  geom_point(aes(y = predicted, size = "Predicted"),
+             pch = 21, color = "black", fill = "salmon") +
+  facet_wrap(vars(siteSR_id), scales = "free", ncol = 2) +
+  ggtitle("Predicted & actual values of top 10 most populous sites",
+          subtitle = "Training set only") +
+  theme_bw() +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
+#### Holdout timeseries
+```{r holdout-time-series-plot, fig.height = 9, fig.width=7}
+# Plot of a subset of the biggest sites
+biggest_sites <- full_predicted %>%
+  count(siteSR_id) %>%
+  arrange(desc(n)) %>%
+  head(n = 10) %>%
+  pull(siteSR_id)
+
+full_predicted %>%
+  filter(
+    siteSR_id %in% biggest_sites,
+    origin == "Holdout set"
+  ) %>%
+  ggplot(aes(x = date)) +
+  # Observed
+  geom_line(aes(y = actual, linetype = "Observed"), color = "orange") +
+  # Predicted
+  geom_point(aes(y = predicted, size = "Predicted"),
+             pch = 21, color = "black", fill = "salmon") +
+  facet_wrap(vars(siteSR_id), scales = "free", ncol = 2) +
+  ggtitle("Predicted & actual values of top 10 most populous sites",
+          subtitle = "Holdout set only") +
+  theme_bw() +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
+### Residuals
+```{r residual-plot}
+full_predicted %>%
+  mutate(residuals = actual - predicted) %>%
+  ggplot(aes(x = predicted, y = residuals)) +
+  # geom_point(alpha = 0.6) +
+  geom_hex() +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  facet_wrap(vars(origin)) +
+  labs(title = "Residuals vs Predicted Values", x = "Predicted", y = "Residuals") +
+  scale_fill_viridis_c() +
+  theme_bw()
+```
+

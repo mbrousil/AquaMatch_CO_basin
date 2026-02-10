@@ -167,7 +167,7 @@ siteSR_matchups <- make_matchups(
   sat_fp = c(LS4_fp, LS5_fp, LS7_fp, LS8_fp, LS9_fp),
   wqp_data = wqp_chla, 
   site_info = site_locs,
-  window = 5
+  window = 3
 )
 toc()
 
@@ -403,7 +403,7 @@ gc()
 ## Applying correction coefficients
 
 Last, we'll apply the correction coefficients from lakeSR. They will also 
-eventually be in the data pub, but for now, we can grab them from Google Drive.
+eventually be in the data pub, but for now, we can grab them from GitHub.
 Downloading is the first step:
 ```{r download-handoffs}
 handoff_download_path <- "in/lakeSR_data/"
@@ -461,6 +461,8 @@ roy_corrected_temporary <- trim_matchups %>%
     green_corr7 = med_Green_intercept + med_Green_slope * med_Green,
     blue_corr7 = med_Blue_intercept + med_Blue_slope * med_Blue,
     nir_corr7 = med_Nir_intercept + med_Nir_slope * med_Nir,
+    swir1_corr7 = med_Swir1_intercept + med_Swir1_slope * med_Swir1,
+    swir2_corr7 = med_Swir2_intercept + med_Swir2_slope * med_Swir2,
     surfacetemp_corr7 = med_SurfaceTemp_intercept + med_SurfaceTemp_slope * med_SurfaceTemp,
     
     # If mission was LandSat 7, then corrected vals should be NA because they
@@ -487,6 +489,18 @@ roy_corrected_temporary <- trim_matchups %>%
     nir_corr7_new = case_when(
       sat_harmonize == "LS7" & is.na(nir_corr7) ~ med_Nir,
       sat_harmonize != "LS7" & !is.na(nir_corr7) ~ nir_corr7,
+      .default = NA_real_
+    ),
+    # SWIR1
+    swir1_corr7_new = case_when(
+      sat_harmonize == "LS7" & is.na(swir1_corr7) ~ med_Swir1,
+      sat_harmonize != "LS7" & !is.na(swir1_corr7) ~ swir1_corr7,
+      .default = NA_real_
+    ),
+    # SWIR2
+    swir2_corr7_new = case_when(
+      sat_harmonize == "LS7" & is.na(swir2_corr7) ~ med_Swir2,
+      sat_harmonize != "LS7" & !is.na(swir2_corr7) ~ swir2_corr7,
       .default = NA_real_
     ),
     # Surface temperature
@@ -521,6 +535,18 @@ roy_corrected_temporary <- trim_matchups %>%
                          is.na(med_Nir_max_in_val),
                        yes = NA_character_, 
                        no = "extreme value"),
+    # SWIR1 
+    flag_swir1_7 = ifelse(test = (med_Swir1 < med_Swir1_max_in_val & 
+                                    med_Swir1 > med_Swir1_min_in_val) |
+                            is.na(med_Swir1_max_in_val),
+                          yes = NA_character_, 
+                          no = "extreme value"),
+    # SWIR2 
+    flag_swir2_7 = ifelse(test = (med_Swir2 < med_Swir2_max_in_val & 
+                                    med_Swir2 > med_Swir2_min_in_val) |
+                            is.na(med_Swir2_max_in_val),
+                          yes = NA_character_, 
+                          no = "extreme value"),
     # Surface temperature
     flag_surfacetemp7 = ifelse(test = (med_SurfaceTemp < med_SurfaceTemp_max_in_val & 
                                          med_SurfaceTemp > med_SurfaceTemp_min_in_val) |
@@ -541,6 +567,12 @@ roy_corrected_temporary %>%
 roy_corrected_temporary %>%
   filter(is.na(nir_corr7_new)) %>%
   nrow()
+roy_corrected_temporary %>%
+  filter(is.na(swir1_corr7_new)) %>%
+  nrow()
+roy_corrected_temporary %>%
+  filter(is.na(swir2_corr7_new)) %>%
+  nrow()
 # ~13K rows, should originate from NA med_SurfaceTemp values
 roy_corrected_temporary %>%
   filter(is.na(surfacetemp_corr7_new)) %>%
@@ -553,6 +585,8 @@ roy_corrected <- roy_corrected_temporary %>%
     green_corr7 = green_corr7_new,
     red_corr7 = red_corr7_new,
     nir_corr7 = nir_corr7_new,
+    swir1_corr7 = swir1_corr7_new,
+    swir2_corr7 = swir2_corr7_new,
     surfacetemp_corr7 = surfacetemp_corr7_new
   ) %>%
   select(
@@ -605,6 +639,8 @@ gardner_corrected_temporary <- trim_matchups %>%
     green_corr7 = med_Green_intercept + med_Green_B1 * med_Green + med_Green_B2 * med_Green^2,
     blue_corr7 = med_Blue_intercept + med_Blue_B1 * med_Blue + med_Blue_B2 * med_Blue^2,
     nir_corr7 = med_Nir_intercept + med_Nir_B1 * med_Nir + med_Nir_B2 * med_Nir^2,
+    swir1_corr7 = med_Swir1_intercept + med_Swir1_B1 * med_Swir1 + med_Swir1_B2 * med_Swir1^2,
+    swir2_corr7 = med_Swir2_intercept + med_Swir2_B1 * med_Swir2 + med_Swir2_B2 * med_Swir2^2,
     surfacetemp_corr7 = med_SurfaceTemp_intercept + med_SurfaceTemp_B1 * med_SurfaceTemp + med_SurfaceTemp_B2 * med_SurfaceTemp^2,
     
     # If mission was LandSat 7, then corrected vals should be NA because they
@@ -631,6 +667,18 @@ gardner_corrected_temporary <- trim_matchups %>%
     nir_corr7_new = case_when(
       sat_harmonize == "LS7" & is.na(nir_corr7) ~ med_Nir,
       sat_harmonize != "LS7" & !is.na(nir_corr7) ~ nir_corr7,
+      .default = NA_real_
+    ),
+    # SWIR1
+    swir1_corr7_new = case_when(
+      sat_harmonize == "LS7" & is.na(swir1_corr7) ~ med_Swir1,
+      sat_harmonize != "LS7" & !is.na(swir1_corr7) ~ swir1_corr7,
+      .default = NA_real_
+    ),
+    # SWIR2
+    swir2_corr7_new = case_when(
+      sat_harmonize == "LS7" & is.na(swir2_corr7) ~ med_Swir2,
+      sat_harmonize != "LS7" & !is.na(swir2_corr7) ~ swir2_corr7,
       .default = NA_real_
     ),
     # Surface temperature
@@ -665,6 +713,18 @@ gardner_corrected_temporary <- trim_matchups %>%
                          is.na(med_Nir_max_in_val),
                        yes = NA_character_, 
                        no = "extreme value"),
+    # SWIR1 
+    flag_swir1_7 = ifelse(test = (med_Swir1 < med_Swir1_max_in_val & 
+                                    med_Swir1 > med_Swir1_min_in_val) |
+                            is.na(med_Swir1_max_in_val),
+                          yes = NA_character_, 
+                          no = "extreme value"),
+    # SWIR2
+    flag_swir2_7 = ifelse(test = (med_Swir2 < med_Swir2_max_in_val & 
+                                    med_Swir2 > med_Swir2_min_in_val) |
+                            is.na(med_Swir2_max_in_val),
+                          yes = NA_character_, 
+                          no = "extreme value"),
     # Surface temperature
     flag_surfacetemp7 = ifelse(test = (med_SurfaceTemp < med_SurfaceTemp_max_in_val & 
                                          med_SurfaceTemp > med_SurfaceTemp_min_in_val) |
@@ -685,6 +745,12 @@ gardner_corrected_temporary %>%
 gardner_corrected_temporary %>%
   filter(is.na(nir_corr7_new)) %>%
   nrow()
+gardner_corrected_temporary %>%
+  filter(is.na(swir1_corr7_new)) %>%
+  nrow()
+gardner_corrected_temporary %>%
+  filter(is.na(swir2_corr7_new)) %>%
+  nrow()
 # ~13K rows, should originate from NA med_SurfaceTemp values
 gardner_corrected_temporary %>%
   filter(is.na(surfacetemp_corr7_new)) %>%
@@ -697,6 +763,8 @@ gardner_corrected <- gardner_corrected_temporary %>%
     green_corr7 = green_corr7_new,
     red_corr7 = red_corr7_new,
     nir_corr7 = nir_corr7_new,
+    swir1_corr7 = swir1_corr7_new,
+    swir2_corr7 = swir2_corr7_new,
     surfacetemp_corr7 = surfacetemp_corr7_new
   ) %>%
   select(
@@ -722,6 +790,191 @@ gc()
 
 ```
 
+## Add band ratio and color metrics, following `GardnerLab-Pitt/OhioRiver_SR`
+
+Function definitions from Gardner lab:
+```{r color-metrics}
+# Based on https://github.com/GardnerLab-Pitt/OhioRiver_SR/blob/main/05_LC02_Build_Matchups.rmd
+
+# Direct from above script:
+chroma <- function(R, G, B) {
+  require(colorscience)
+  require(tidyverse)
+
+# Convert R,G, and B spectral reflectance to dominant wavelength based
+# on CIE chromaticity color space
+
+# see Wang et al 2015. MODIS-Based Radiometric Color Extraction and
+# Classification of Inland Water With the Forel-Ule
+# Scale: A Case Study of Lake Taihu
+
+# chromaticity.diagram.color.fill()
+
+Xi <- 2.7689*R + 1.7517*G + 1.1302*B
+Yi <- 1.0000*R + 4.5907*G + 0.0601*B
+Zi <- 0.0565*G + 5.5943*B
+
+x <-  Xi / (Xi + Yi +  Zi)
+y <-  Yi / (Xi + Yi +  Zi)
+z <-  Zi / (Xi + Yi +  Zi)
+
+# Calculate hue angle
+alpha <- atan2( (x - (1/3)), (y - (1/3))) * 180/pi
+
+# Make look up table for hue angle to wavelength conversion
+cie <- cccie31 %>%
+  dplyr::mutate(a = atan2( (x - (1/3)), (y - (1/3))) * 180/pi) %>%
+  dplyr::filter(wlnm <= 700) %>%
+  dplyr::filter(wlnm >=380) 
+
+# Find nearest dominant wavelength to hue angle
+wl <- cie[as.vector(sapply(alpha,function(x) which.min(abs(x - cie$a)))), 'wlnm']
+
+return(wl)
+}
+
+pull_transform <- function(df, maxRGB=1, RGB=F) {
+  
+  if(RGB == T) { 
+    
+    maxRGB <- maxRGB
+    
+    data <- df %>%
+      filter_at(vars(Red, Green, Blue), all_vars(.< maxRGB))
+    
+  }else{ 
+    data <- df    
+
+    maxRGB <- df  %>%
+      dplyr::select(Red, Green, Blue) %>%
+      dplyr::summarise(maxRGB = max(., na.rm=F)) 
+    
+    maxRGB <- maxRGB$maxRGB
+  }
+  
+  data <- data %>%
+    dplyr::mutate(NR = Nir/Red,
+                  BR = Blue/Red,
+                  GR = Green/Red,
+                  SR = Swir1/Red,
+                  BG = Blue/Green,
+                  RG = Red/Green, 
+                  NG = Nir/Green,
+                  SG = Swir1/Green,
+                  BN = Blue/Nir,
+                  GN = Green/Nir,
+                  RN = Red/Nir,
+                  SN = Swir1/Nir,
+                  BS = Blue/Swir1,
+                  GS = Green/Swir1,
+                  RS = Red/Swir1,
+                  NS = Nir/Swir1,
+                  R.GN = Red/ (Green + Nir),
+                  R.GB = Red/ (Green + Blue),
+                  R.GS = Red/ (Green + Swir1),
+                  R.BN = Red/ (Blue + Nir),
+                  R.BS = Red/ (Blue + Swir1),
+                  R.NS = Red/ (Nir + Swir1),
+                  G.BR = Green/ (Blue + Red),
+                  G.BN = Green / (Blue + Nir),
+                  G.BS = Green / (Blue + Swir1),
+                  G.RN = Green / (Red + Nir),
+                  G.RB = Green / (Red + Blue),
+                  G.NS = Green / (Nir + Swir1),
+                  B.RG = Blue / (Red + Green),
+                  B.RN = Blue / (Red + Nir),
+                  B.RS = Blue / (Red + Swir1),
+                  B.GN = Blue / (Green + Nir),
+                  B.GS = Blue / (Green + Swir1),
+                  B.NS = Blue / (Nir + Swir1),
+                  N.RG = Nir / (Red + Green),
+                  N.RB = Nir / (Red + Blue),
+                  N.RS = Nir / (Red + Swir1),
+                  N.GB = Nir / (Green + Blue),
+                  N.GS = Nir / (Green + Swir1),
+                  N.BS = Nir / (Blue  + Swir1),
+                  GR2 = (Green + Red) / 2,
+                  GN2 = (Green + Nir) / 2,
+                  # Adding bloom metrics 
+                  BR_G = (Blue - Red) / Green,
+                  NS_NR = (Nir - Swir1) / (Red - Swir1),
+                  fai = Nir - (Red + (Swir1-Red)*((830-660)/(1650-660))),
+                  GCI = Nir/(Green-1),
+                  IRG = Red-Green,
+                  SABI = (Nir-Red)/(Blue + Green),
+                  KIVU = (Blue-Red)/Green,
+                  GB = Green/Blue,
+                  GNDVI = (Nir-Green)/(Nir+Green),
+                  EVI = 2.5*((Nir-Red)/(Nir+((6*Red)-(7.5*Blue))+1)),
+                  KAB = 1.67-3.94*log(Blue)+3.78*log(Red),
+                  KRL = (((Blue/Red)*Nir)-98)/0.75,
+                  N_S = Nir - Swir1,
+                  N_R = Nir - Red,
+                  ndvi = ((Nir-Red)/(Nir+Red)),
+                  ndwi = ((Green- Swir1)/(Green + Swir1)),
+                  ndssi = ((Blue - Nir)/ (Blue + Nir)),
+                  gn.gn= ((Green- Nir)/ (Green + Nir)))
+
+  color <- data %>% filter(Blue > 0 & Green > 0 & Red > 0) %>% 
+    dplyr:: mutate(hue = rgb2hsv(r=Red, g=Green, b=Blue, maxColorValue = maxRGB)[1,],
+            saturation = rgb2hsv(r=Red, g=Green,  b=Blue, maxColorValue = maxRGB)[2,],
+            bright = rgb2hsv(r=Red, g=Green,  b=Blue, maxColorValue = maxRGB)[3,],
+            bright_tot = (Red + Green + Nir +Blue),
+            dw = chroma(R=Red, G=Green, B=Blue),
+            hexcolor = rgb(r=Red, g=Green, b=Blue, maxColorValue = maxRGB))
+
+  color_na <- data %>% filter(!uniqueID %in% color$uniqueID) %>% 
+    dplyr:: mutate(hue = 'NA',
+            saturation = 'NA',
+            bright = 'NA',
+            bright_tot = 'NA',
+            dw = 'NA', 
+            hexcolor = 'NA',
+            dw = as.numeric(dw),
+            saturation = as.numeric(saturation),
+            hue = as.numeric(hue))
+
+  data <-rbind(color, color_na)
+
+  return(data)
+}
+```
+
+Apply the functions above to finalize the datasets:
+
+### Roy
+```{r finalize-roy, message=FALSE}
+# Make naming compatible with Gardner functions:
+roy_final <- roy_corrected %>%
+  rename(
+    Red = red_corr7,
+    Green = green_corr7,
+    Blue = blue_corr7,
+    Nir = nir_corr7,
+    Swir1 = swir1_corr7,
+    Swir2 = swir2_corr7,
+    Surface_temp_kelvin = surfacetemp_corr7
+  ) %>%
+  mutate(uniqueID = row_number()) %>%
+  pull_transform(., RGB = F, maxRGB = 1) 
+```
+
+### Gardner
+```{r finalize-gardner, message=FALSE}
+gardner_final <- gardner_corrected %>%
+  rename(
+    Red = red_corr7,
+    Green = green_corr7,
+    Blue = blue_corr7,
+    Nir = nir_corr7,
+    Swir1 = swir1_corr7,
+    Swir2 = swir2_corr7,
+    Surface_temp_kelvin = surfacetemp_corr7
+  ) %>%
+  mutate(uniqueID = row_number()) %>%
+  pull_transform(., RGB = F, maxRGB = 1) 
+```
+
 Export the final products:
 ```{r export}
 # Where to export the matchup data
@@ -733,11 +986,11 @@ if (!dir.exists(output_path)) {
 }
 
 # Export matchups
-write_feather(x = roy_corrected,
+write_feather(x = roy_final,
               sink = file.path(output_path,
                                "co_basin_matchups_roy_correction.feather"))
 
-write_feather(x = gardner_corrected,
+write_feather(x = gardner_final,
               sink = file.path(output_path,
                                "co_basin_matchups_gardner_correction.feather"))
 
